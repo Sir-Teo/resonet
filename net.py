@@ -1,6 +1,8 @@
 from argparse import ArgumentParser
 from argparse import ArgumentDefaultsHelpFormatter as arg_formatter
-
+from torch.utils.tensorboard import SummaryWriter
+import torchvision
+from helpers import *
 
 def get_parser():
     parser = ArgumentParser(formatter_class=arg_formatter)
@@ -141,6 +143,9 @@ def validate(input_tens, model, epoch, criterion, COMM=None, error = 0.3):
         for pear, spear in zip(pears, spears):
             logger.info("\tpredicted-VS-truth: PearsonR=%.3f%%, SpearmanR=%.3f%%" \
                 % (pear*100, spear*100))
+            # add scalars to tensorboard
+            writer.add_scalar('PearsonR', pear*100, epoch)
+            writer.add_scalar('SpearmanR', spear*100, epoch)
         ave_loss = np.mean(all_loss)
         return acc, ave_loss, all_lab, all_pred
     else:
@@ -325,6 +330,21 @@ def do_training(h5input, h5label, h5imgs, outdir,
     test_tens = DataLoader(test_imgs, batch_size=bs, shuffle=shuffle, sampler=test_sampler)
 
     nbatch = np.ceil((train_stop - train_start) / bs)
+
+    # add image to tensorboard
+    dataiter = iter(train_tens)
+    images, labels = next(dataiter)
+
+    # create grid of images
+    img_grid = torchvision.utils.make_grid(images)
+
+    # write to tensorboard
+    writer.add_image('some random images', img_grid)
+    writer.add_graph(nety.resnet, images)
+    writer.close()
+
+
+
     if COMM is not None:
         nbatch = np.ceil((train_stop - train_start) / bs / COMM.size)
 
@@ -362,7 +382,10 @@ def do_training(h5input, h5label, h5imgs, outdir,
             loss = criterion(outputs, labels)
             loss.backward()
             optimizer.step()
-            #l = loss.item()
+            l = loss.item()
+            # add scalars to tensorboard
+            writer.add_scalar('Loss in epoch: ' + str(epoch), l, i)
+
             #losses.append(l)
             #all_losses.append(l)
             #if i % 10 == 0 and len(losses)> 1:
@@ -389,7 +412,9 @@ def do_training(h5input, h5label, h5imgs, outdir,
             train_acc,train_loss,_,_ = validate(train_tens_validate, nety, epoch, criterion, COMM, error = error)
 
             mx_acc = max(acc, mx_acc)
-            
+            # tensorboard
+            writer.add_scalar('Training',{'accuracy': train_acc, 'loss':train_loss}, epoch)
+            writer.add_scalar('Testing',{'accuracy': test_acc, 'loss':test_loss}, epoch)
             if COMM is None or COMM.rank==0:    
                 plot_acc(ax0, 0, test_loss, epoch)
                 plot_acc(ax0, 1, train_loss, epoch)
@@ -434,6 +459,10 @@ if __name__ == "__main__":
         train_start_stop = args.trainRange
     if args.testRange is not None:
         test_start_stop = args.testRange
+    # Tensorboard
+    # Writer will output to ./runs/ directory by default
+    writer = SummaryWriter()
+
     do_training(args.input, args.labelName, args.imgsName, args.outdir,
                 train_start_stop=train_start_stop,
                 test_start_stop=test_start_stop,
